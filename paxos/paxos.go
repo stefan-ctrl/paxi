@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/ailidani/paxi"
+	"github.com/ailidani/paxi/log"
 )
 
 // entry in log
@@ -32,22 +33,32 @@ type Paxos struct {
 	quorum   *paxi.Quorum    // phase 1 quorum
 	requests []*paxi.Request // phase 1 pending requests
 
-	Q1              func(*paxi.Quorum) bool
-	Q2              func(*paxi.Quorum) bool
-	ReplyWhenCommit bool
+	Q1               func(*paxi.Quorum) bool
+	Q2               func(*paxi.Quorum) bool
+	ReplyWhenCommit  bool
+	Unstable         chan struct{}
+	FirstElection    bool
+	NewLeader        bool
+	T2Started        bool
+	ElectionFinished bool
 }
 
 // NewPaxos creates new paxos instance
 func NewPaxos(n paxi.Node, options ...func(*Paxos)) *Paxos {
 	p := &Paxos{
-		Node:            n,
-		log:             make(map[int]*entry, paxi.GetConfig().BufferSize),
-		slot:            -1,
-		quorum:          paxi.NewQuorum(),
-		requests:        make([]*paxi.Request, 0),
-		Q1:              func(q *paxi.Quorum) bool { return q.Majority() },
-		Q2:              func(q *paxi.Quorum) bool { return q.Majority() },
-		ReplyWhenCommit: false,
+		Node:             n,
+		log:              make(map[int]*entry, paxi.GetConfig().BufferSize),
+		slot:             -1,
+		quorum:           paxi.NewQuorum(),
+		requests:         make([]*paxi.Request, 0),
+		Q1:               func(q *paxi.Quorum) bool { return q.Majority() },
+		Q2:               func(q *paxi.Quorum) bool { return q.Majority() },
+		ReplyWhenCommit:  false,
+		Unstable:         make(chan struct{}),
+		FirstElection:    true,
+		NewLeader:        false,
+		T2Started:        false,
+		ElectionFinished: false,
 	}
 
 	for _, opt := range options {
@@ -55,6 +66,11 @@ func NewPaxos(n paxi.Node, options ...func(*Paxos)) *Paxos {
 	}
 
 	return p
+}
+
+// Leader returns leader id of the current ballot
+func (p *Paxos) HasLeader() bool {
+	return p.ballot.ID() != ""
 }
 
 // IsLeader indecates if this node is current leader
@@ -84,7 +100,7 @@ func (p *Paxos) SetBallot(b paxi.Ballot) {
 
 // HandleRequest handles request and start phase 1 or phase 2
 func (p *Paxos) HandleRequest(r paxi.Request) {
-	// log.Debugf("Replica %s received %v\n", p.ID(), r)
+	log.Debugf("Replica %s received %v\n", p.ID(), r)
 	if !p.active {
 		p.requests = append(p.requests, &r)
 		// current phase 1 pending
@@ -132,10 +148,12 @@ func (p *Paxos) P2a(r *paxi.Request) {
 
 // HandleP1a handles P1a message
 func (p *Paxos) HandleP1a(m P1a) {
-	// log.Debugf("Replica %s ===[%v]===>>> Replica %s\n", m.Ballot.ID(), m, p.ID())
+	log.Debugf("Replica %s ===[%v]===>>> Replica %s\n", m.Ballot.ID(), m, p.ID())
 
 	// new leader
 	if m.Ballot > p.ballot {
+		p.NewLeader = true
+		PrintTiming(LEADER_ELECTED)
 		p.ballot = m.Ballot
 		p.active = false
 		// TODO use BackOff time or forward
@@ -185,7 +203,7 @@ func (p *Paxos) HandleP1b(m P1b) {
 
 	// old message
 	if m.Ballot < p.ballot || p.active {
-		// log.Debugf("Replica %s ignores old message [%v]\n", p.ID(), m)
+		log.Debugf("Replica %s ignores old message [%v]\n", p.ID(), m)
 		return
 	}
 
@@ -194,6 +212,9 @@ func (p *Paxos) HandleP1b(m P1b) {
 		p.ballot = m.Ballot
 		p.active = false // not necessary
 		// forward pending requests to new leader
+		PrintTiming(LEADER_ELECTED)
+		p.Unstable <- struct{}{}
+		p.NewLeader = true
 		p.forward()
 		// p.P1a()
 	}
@@ -229,11 +250,14 @@ func (p *Paxos) HandleP1b(m P1b) {
 
 // HandleP2a handles P2a message
 func (p *Paxos) HandleP2a(m P2a) {
-	// log.Debugf("Replica %s ===[%v]===>>> Replica %s\n", m.Ballot.ID(), m, p.ID())
+	log.Debugf("Replica %s ===[%v]===>>> Replica %s\n", m.Ballot.ID(), m, p.ID())
 
 	if m.Ballot >= p.ballot {
 		p.ballot = m.Ballot
 		p.active = false
+		p.Unstable <- struct{}{}
+		p.NewLeader = true
+		PrintTiming(LEADER_ELECTED)
 		// update slot number
 		p.slot = paxi.Max(p.slot, m.Slot)
 		// update entry
@@ -272,13 +296,17 @@ func (p *Paxos) HandleP2b(m P2b) {
 		return
 	}
 
-	// log.Debugf("Replica %s ===[%v]===>>> Replica %s\n", m.ID, m, p.ID())
+	log.Debugf("Replica %s ===[%v]===>>> Replica %s\n", m.ID, m, p.ID())
 
 	// reject message
 	// node update its ballot number and falls back to acceptor
 	if m.Ballot > p.ballot {
 		p.ballot = m.Ballot
 		p.active = false
+		p.Unstable <- struct{}{}
+		PrintTiming(NEW_LEADER)
+		PrintTiming(LEADER_ELECTED)
+		p.NewLeader = true
 	}
 
 	// ack message
@@ -309,7 +337,7 @@ func (p *Paxos) HandleP2b(m P2b) {
 
 // HandleP3 handles phase 3 commit message
 func (p *Paxos) HandleP3(m P3) {
-	// log.Debugf("Replica %s ===[%v]===>>> Replica %s\n", m.Ballot.ID(), m, p.ID())
+	log.Debugf("Replica %s ===[%v]===>>> Replica %s\n", m.Ballot.ID(), m, p.ID())
 
 	p.slot = paxi.Max(p.slot, m.Slot)
 
@@ -346,7 +374,7 @@ func (p *Paxos) exec() {
 		if !ok || !e.commit {
 			break
 		}
-		// log.Debugf("Replica %s execute [s=%d, cmd=%v]", p.ID(), p.execute, e.command)
+		log.Debugf("Replica %s execute [s=%d, cmd=%v]", p.ID(), p.execute, e.command)
 		value := p.Execute(e.command)
 		if e.request != nil {
 			reply := paxi.Reply{
