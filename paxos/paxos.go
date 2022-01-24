@@ -45,6 +45,7 @@ type Paxos struct {
 
 // NewPaxos creates new paxos instance
 func NewPaxos(n paxi.Node, options ...func(*Paxos)) *Paxos {
+	Print("PaxosCreated")
 	p := &Paxos{
 		Node:             n,
 		log:              make(map[int]*entry, paxi.GetConfig().BufferSize),
