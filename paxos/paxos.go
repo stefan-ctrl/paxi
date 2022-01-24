@@ -116,6 +116,7 @@ func (p *Paxos) HandleRequest(r paxi.Request) {
 // P1a starts phase 1 prepare
 func (p *Paxos) P1a() {
 	Print("P1a")
+	PrintTiming(ELECTION_START) //P1 election start
 	if p.active {
 		return
 	}
