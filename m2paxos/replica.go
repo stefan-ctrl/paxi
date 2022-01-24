@@ -1,6 +1,8 @@
 package m2paxos
 
 import (
+	"fmt"
+
 	"github.com/ailidani/paxi"
 	"github.com/ailidani/paxi/log"
 )
@@ -84,10 +86,11 @@ func (r *Replica) handleCommit(m Commit) {
 }
 
 func (r *Replica) handleLeaderChange(m LeaderChange) {
+	Print("handleLeaderChange")
 	log.Debugf("Replica %s ===[%v]===>>> Replica %s\n", m.From, m, r.ID())
 	p := r.paxi[m.Key]
 	if m.Ballot == p.Ballot() && m.To == r.ID() {
-		// log.Debugf("Replica %s : change leader of key %d\n", r.ID(), m.Key)
+		Print(fmt.Sprintf("Replica %s : change leader of key %d\n", r.ID(), m.Key))
 		p.P1a()
 	}
 }

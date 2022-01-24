@@ -115,6 +115,7 @@ func (p *Paxos) HandleRequest(r paxi.Request) {
 
 // P1a starts phase 1 prepare
 func (p *Paxos) P1a() {
+	Print("P1a")
 	if p.active {
 		return
 	}
@@ -126,6 +127,7 @@ func (p *Paxos) P1a() {
 
 // P2a starts phase 2 accept
 func (p *Paxos) P2a(r *paxi.Request) {
+	Print("P2a")
 	p.slot++
 	p.log[p.slot] = &entry{
 		ballot:    p.ballot,

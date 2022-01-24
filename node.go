@@ -1,6 +1,7 @@
 package paxi
 
 import (
+	"fmt"
 	"net/http"
 	"reflect"
 	"sync"
@@ -163,7 +164,7 @@ func (n *node) Forward(id ID, m Request) {
 */
 
 func (n *node) Forward(id ID, m Request) {
-	log.Debugf("Node %v forwarding %v to %s", n.ID(), m, id)
+	Print(fmt.Sprintf("Node %v forwarding %v to %s", n.ID(), m, id))
 	m.NodeID = n.id
 	n.Lock()
 	n.forwards[m.Command.String()] = &m

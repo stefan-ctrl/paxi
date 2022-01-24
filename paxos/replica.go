@@ -2,6 +2,7 @@ package paxos
 
 import (
 	"flag"
+	"fmt"
 	"strconv"
 	"time"
 
@@ -61,6 +62,7 @@ func (r *Replica) handleRequest(m paxi.Request) {
 	if *ephemeralLeader || r.Paxos.IsLeader() || r.Paxos.Ballot() == 0 {
 		r.Paxos.HandleRequest(m)
 	} else {
+		Print(fmt.Sprintf("Forwarded Request to Leader: %s", string(r.Paxos.Leader())))
 		go r.Forward(r.Paxos.Leader(), m)
 	}
 }
